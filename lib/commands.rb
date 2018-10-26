@@ -1,27 +1,29 @@
 require 'csv'
 require 'json'
+require 'find'
+require 'digest/md5'
 require 'redis'
 
 class MetisUtils
 
   class Help < Etna::Command
-    usage 'List this help'
+    usage "List this help.\n\n"
 
     def execute
       puts 'Commands:'
-      Ihg.instance.commands.each do |name,cmd|
+      MetisUtils.instance.commands.each do |name, cmd|
         puts cmd.usage
       end
     end
   end
 
   class Console < Etna::Command
-    usage 'Open a console with a connected app instance.'
+    usage "Open a console with a connected app instance.\n\n"
 
     def execute
       require 'irb'
       ARGV.clear
-      IRB.start
+      IRB.startredis = Redis.new(db: redis_db_index)
     end
 
     def setup(config)
@@ -29,375 +31,161 @@ class MetisUtils
     end
   end
 
-  class MetisSummary < Etna::Command
+  class Diff < Etna::Command
+    usage "Compare two scans from two Redis DBs.
+       * args - arg[0]: redis_db_index_1, arg[1]: redis_db_index_2, arg[3]: \
+diff_file.csv\n\n"
 
-    usage "Take a file/dir scan from Metis and summarize the data.
-      *args - arg[0]: input_metis_scan_file\n\n"
+    def execute(redis_db_index_1, redis_db_index_2, diff_file)
+      redis_a = Redis.new(db: redis_db_index_1)
+      redis_b = Redis.new(db: redis_db_index_2)
 
-    def execute(input_metis_scan_file)
-      total_files = 0
+      new_files = 0
+      new_size = 0
+      new_list = []
+
+      redis_a_size = redis_a.dbsize
+      redis_b_size = redis_b.dbsize
+
+      redis_b.keys.each do |b_key|
+        if !redis_a.exists(b_key)
+          file_data = JSON.parse(redis_b.get(b_key))
+
+          new_files += 1
+          new_size += file_data['size'].to_i
+          new_list.push([file_data['size'], b_key, file_data['md5']])
+        end
+      end
+
+      CSV.open(diff_file, 'w') do |csv|
+        new_list.each do |row|
+          csv << row
+        end
+      end
+
+      puts "Summary of diff between redis dbs #{redis_db_index_1} and \
+#{redis_db_index_2}:"
+
+      puts "#{redis_a_size} keys in redis db #{redis_db_index_1}."
+      puts "#{redis_b_size} keys in redis db #{redis_db_index_2}."
+      puts "#{new_files} diff files in redis db #{redis_db_index_2}."
+      puts "#{new_size} bytes diff in redis db #{redis_db_index_2}."
+    end
+
+    def setup(config, *args)
+      super
+    end
+  end
+
+  class Update < Etna::Command
+    usage "Update a Redis DB with a scan file.
+       * args - arg[0]: redis_db_index, arg[1]: input_scan_file.csv\n\n"
+
+    def confirm(*args)
+      print(*args)
+      STDIN.gets.chomp
+    end
+
+    def execute(redis_db_index, input_scan_file)
+
+      if !File.file?(input_scan_file)
+        puts "'#{input_scan_file}' is not a file."
+        exit 1
+      end
+
+      scan_data = CSV.read(input_scan_file)
+      new_files = 0
+      files_wo_hashes = 0
+      file_md5_miss = 0
+      start_time = Time.now.getutc
+      redis = Redis.new(db: redis_db_index)
+
+      if redis.randomkey != nil
+        if confirm("The redis db #{} is not empty, continue? [y/n] ") != 'y'
+          puts 'Exiting without doing anything.'
+          exit 0
+        end
+      end
+
+      scan_data.each_index do |row_num|
+
+        row = scan_data[row_num]
+
+        if !redis.exists(row[1])
+          new_files += 1
+          redis.set(row[1], {size: row[0], md5: row[2]}.to_json)
+          next
+        end
+
+        file_data = JSON.parse(redis.get(row[1]))
+
+        if !file_data.key?('md5')
+          files_wo_hashes += 1
+          redis.set(row[1], {size: row[0], md5: row[2]}.to_json)
+          next
+        end
+
+        if file_data['md5'] != row[2]
+          file_md5_miss += 1
+          puts "md5 mismatch:#{row[1]}, db:#{file_data['md5']}, scan:#{row[2]}"
+        end
+      end
+
+      puts "Summary of update to redis db #{redis_db_index} from scan \
+#{input_scan_file}:"
+
+      puts "#{new_files} new files."
+      puts "#{files_wo_hashes} files do not have md5 hashes."
+      puts "#{file_md5_miss} files have mismatched md5 hashes."
+      puts "Update completed in (#{Time.now.getutc - start_time}) seconds."
+    end
+
+    def setup(config, *args)
+      super
+    end
+  end
+
+  class Scan < Etna::Command
+    usage "Scan files in a directory. Extract full path name, size, and hash.
+       * args - arg[0]: directory, arg[1]: output_scan_file.csv\n\n"
+
+    def execute(directory, output_scan_file)
+
+      if !File.directory?(directory)
+        puts "'#{directory}' is not a directory."
+        exit 1
+      end
+
+      scan_data = []
       total_size = 0
-      File.foreach(input_metis_scan_file).with_index do |line, line_num|
+      total_files = 0
+      start_time = Time.now.getutc
 
-       line = line.split("\t")
-       if(
-          !line[1].end_with?("/\n") &&
-          !line[1].include?("C=M;O=D") &&
-          !line[1].include?("C=M;O=A") &&
-          !line[1].include?("C=N;O=D") &&
-          !line[1].include?("C=N;O=A") &&
-          !line[1].include?("C=S;O=D") &&
-          !line[1].include?("C=S;O=A") &&
-          !line[1].include?("C=D;O=D") &&
-          !line[1].include?("C=D;O=A")
-        )
-          total_size += line[0].to_i
+      Find.find(directory) do |path|
+        if File.file?(path)
+          size = File.size(path)
+          digest = Digest::MD5.hexdigest(File.read(path))
+          scan_data.push([size, path, digest])
+
+          total_size += size
           total_files += 1
-
-          puts "\r#{total_size} bytes"
-          print "\033[1A"
         end
       end
 
-      human_readable = total_size / 1024 / 1024 / 1024
-      puts "Total data size: #{human_readable}GB (#{total_size} bytes)"
-      puts "Total file count: #{total_files}"
-    end
-
-    def setup(config)
-      super
-    end
-  end
-
-  class MetisUpdate < Etna::Command
-    usage "Loop a csv version of an Metis scre and update the DB as necessary.
-      *args - arg[0]: input_metis_clean_csv, arg[1]: output_metis_new_csv\n\n"
-
-    def set_record(key, size)
-      @redis.set(
-        key,
-        {
-          size: size,
-        }.to_json
-      )
-    end
-
-    def output_report(total_records, new_records, old_records)
-      puts "\r Total: #{total_records}                                         "
-      puts "\r New:   #{new_records}                                           "
-      puts "\r Old:   #{old_records}                                           "
-    end
-
-    def execute(input_metis_clean_csv, output_metis_new_csv)
-      total_records = 0
-      new_records = 0
-      old_records = 0
-
-      input_tsv = CSV.read(input_metis_clean_csv)
-      output_csv = CSV.open(output_metis_new_csv, 'w')
-
-      input_tsv.each do |row|
-        result = @redis.get(row[1])
-
-        if result.nil?
-          set_record(row[1], row[0])
-          output_csv << row
-          new_records += 1
-        else
-          old_records += 1
-        end
-
-        total_records += 1
-        output_report(total_records, new_records, old_records)
-        print "\033[3A"
-
-        if total_records%10000 == 0
-          output_csv.flush
+      CSV.open(output_scan_file, 'w') do |csv|
+        scan_data.each do |row|
+          csv << row
         end
       end
 
-      output_report(total_records, new_records, old_records)
+      puts "Scan summary of #{directory}:"
+
+      puts "#{total_files} files."
+      puts "#{total_size} bytes."
+      puts "Scan completed in (#{Time.now.getutc - start_time}) seconds."
     end
 
     def setup(config, *args)
-      super
-      @redis = Redis.new(db: 1)
-    end
-  end
-
-  class MetisPrune < Etna::Command
-    usage "Take in a Metis tsv scan and output a csv without junk files.
-      *args - arg[0]: input_metis_scan_tsv, arg[1]: output_metis_clean_csv\n\n"
-
-    def execute(input_metis_scan_tsv, output_metis_clean_csv)
-
-      output_csv = CSV.open(output_metis_clean_csv, 'w')
-      line_count = 0
-      CSV.foreach(input_metis_scan_tsv, {col_sep: "\t"}) do |row|
-        if(
-          !row[1].end_with?("/\n") &&
-          !row[1].include?("C=M;O=D") &&
-          !row[1].include?("C=M;O=A") &&
-          !row[1].include?("C=N;O=D") &&
-          !row[1].include?("C=N;O=A") &&
-          !row[1].include?("C=S;O=D") &&
-          !row[1].include?("C=S;O=A") &&
-          !row[1].include?("C=D;O=D") &&
-          !row[1].include?("C=D;O=A") &&
-          !row[1].include?("index.html")
-        )
-          output_csv << [row[0], row[1].sub('./', '')]
-        end
-
-        line_count += 1
-        puts "\r#{line_count} lines                                            "
-        print "\033[1A"
-
-        if line_count%10000 == 0
-          output_csv.flush
-        end
-      end
-
-      output_csv.close
-    end
-
-    def setup(config)
-      super
-    end
-  end
-
-  class MetisLoad < Etna::Command
-    usage "Do and initial load of scanned Metis data into the Redis DB.
-      *args - arg[0]: input_metis_scan_csv\n\n"
-
-    def execute(input_metis_scan_csv)
-      redis = Redis.new(db: 1)
-
-      CSV.foreach(input_metis_scan_csv) do |row|
-        redis.set(
-          row[1],
-          {
-            size: row[0].to_i
-          }.to_json
-        )
-      end
-    end
-
-    def setup(config)
-      super
-    end
-  end
-
-  class IhgSummary < Etna::Command
-    usage "Take a parsed csv scan file and summarize the size and file count
-      *args - arg[0]: input_scan_csv_file\n\n"
-
-    def execute(input_scan_csv_file)
-      start_stamp = nil
-      end_stamp = nil
-      total_files = 0
-      total_size = 0
-
-      CSV.foreach(input_scan_csv_file).with_index do |row, index|
-
-        if index == 0
-          start_stamp = row[1]
-        end
-
-        end_stamp = row[1]
-        total_files += 1
-        total_size = total_size + row[0].to_i
-
-        puts "\r#{total_size} bytes"
-        print "\033[1Av"
-      end
-
-      human_readable = total_size / 1024 / 1024 / 1024
-      puts "Web scrape started:  #{start_stamp}"
-      puts "Web scrape finished: #{end_stamp}"
-      puts "Total data size: #{human_readable}GB (#{total_size} bytes)"
-      puts "Total file count: #{total_files}"
-    end
-
-    def setup(config, *args)
-      super
-    end
-  end
-
-  class IhgPrune < Etna::Command
-   usage "Take a scrape file and output a csv of the data.
-      *args - arg[0]: 01-fongl-ihg-scrape_[MONTH]_[DATE].log, arg[1]: 02-fongl-ihg-clean_[MONTH]_[DATE].csv\n\n"
-
-    def reset_vars
-      @url_matches = false
-      @length_matches = false
-
-      @url_str=''
-      @length_str=''
-    end
-
-    def parse_vars(content_length, url_data)
-      size = content_length.split(' ')[1].to_i
-      last_scan = "#{url_data.split(' ')[0].sub!('--', '')} #{url_data.split(' ')[1].sub!('--', '')}"
-      file = url_data.split(' ')[2]
-      "#{size},#{last_scan},#{file}\n"
-    end
-
-    def execute(input_scrape_file, output_csv_file)
-      url_to_match = 'https://ihg-client.ucsf.edu/fongl/'
-      content_length_to_match = 'Content-Length'
-      ending_str = 'broken links'
-
-      @url_matches = false
-      @length_matches = false
-
-      @url_str=''
-      @length_str=''
-
-      output_file = File.open(output_csv_file, 'w')
-      File.foreach(input_scrape_file).with_index do |line, line_num|
-
-        if line.include?(url_to_match)
-          @url_matches = true
-          @url_str = line
-        end
-
-        if line.include?(content_length_to_match)
-          @length_matches = true
-          @length_str = line
-        end
-
-        if line == "\n"
-          reset_vars
-        end
-
-        if @url_matches && @length_matches
-          if(
-            !@url_str.end_with?("/\n") &&
-            !@url_str.include?("C=M;O=D") &&
-            !@url_str.include?("C=M;O=A") &&
-            !@url_str.include?("C=N;O=D") &&
-            !@url_str.include?("C=N;O=A") &&
-            !@url_str.include?("C=S;O=D") &&
-            !@url_str.include?("C=S;O=A") &&
-            !@url_str.include?("C=D;O=D") &&
-            !@url_str.include?("C=D;O=A")
-          )
-
-            output_file.write(
-              parse_vars(@length_str, @url_str)
-            )
-          end
-
-          reset_vars
-        end
-
-        if line_num%1000 == 0
-          output_file.flush
-        end
-      end
-
-      output_file.close
-    end
-
-    def setup(config, *args)
-      super
-    end
-  end
-
-  class IhgUpdate < Etna::Command
-    usage "Loop a csv version of an IHG scrape and update the DB as necessary.
-      *args - arg[0]: 02-fongl-ihg-clean_[MONTH]_[DATE].csv, arg[1]: 03-fongl-ihg-new_[MONTH]_[DATE].csv\n\n"
-
-    def set_record(key, size, last_scan)
-      @redis.set(
-        key,
-        {
-          size: size,
-          last_scan: last_scan
-        }.to_json
-      )
-    end
-
-    def output_report(total_records, new_records, old_records, update_records)
-      puts "\r Total:   #{total_records}                                       "
-      puts "\r New:     #{new_records}                                         "
-      puts "\r Old:     #{old_records}                                         "
-      puts "\r Updated: #{update_records}                                      "
-    end
-
-    def execute(input_ihg_clean_csv, output_ihg_new_csv)
-      total_records = 0
-      new_records = 0
-      old_records = 0
-      update_records = 0
-      url = 'https://ihg-client.ucsf.edu/fongl/'
-
-      input_csv = CSV.read(input_ihg_clean_csv)
-      output_csv = CSV.open(output_ihg_new_csv, 'w')
-
-      input_csv.each do |row|
-
-        key = row[2].sub(url, '')
-        result = @redis.get(key)
-
-        if result.nil?
-          set_record(key, row[0], row[1])
-          output_csv << row
-          new_records += 1
-        else
-
-          result = JSON.parse(result)
-
-          if(
-            DateTime.parse(row[1]) !=
-            DateTime.parse(result['last_scan'])
-          )
-            set_record(key, row[0], row[1])
-            update_records += 1
-          end
-           old_records += 1
-        end
-
-        total_records += 1
-        output_report(total_records, new_records, old_records, update_records)
-        print "\033[4A"
-
-        if total_records%10000 == 0
-          output_csv.flush
-        end
-      end
-
-      output_report(total_records, new_records, old_records, update_records)
-    end
-
-    def setup(config, *args)
-      super
-      @redis = Redis.new(db: 0)
-    end
-  end
-
-  class IhgLoad < Etna::Command
-
-    usage "Do and initial load of scanned IHG data into the Redis DB.
-      *args - arg[0]: 02-fongl-ihg-clean_[MONTH]_[DATE].csv\n\n"
-
-    def execute(input_ihg_clean_csv)
-      redis = Redis.new(db: 0)
-      base_url = 'https://ihg-client.ucsf.edu/fongl/'
-
-      CSV.foreach(input_ihg_clean_csv).with_index do |row, row_num|
-        redis.set(
-          row[2].sub!(base_url, ''),
-          {
-            size: row[0].to_i,
-            last_scan: row[1]
-          }.to_json
-        )
-      end
-    end
-
-    def setup(config)
       super
     end
   end
