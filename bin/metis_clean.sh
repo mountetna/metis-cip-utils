@@ -6,7 +6,7 @@
 # The command call should be...
 # ./metis_clean.sh [input_file] > output_file.csv
 
-while IFS=$'\t' read -r -a tmp ; do
+while IFS=$'\t' read -r -a tmp ;
 do
-  printf "%s,%s,\n" "${p[0]}" "${p[1]}" 
+  printf "%s,%s,\n" "${p[0]}" "${p[1]}"
 done < "$1"
