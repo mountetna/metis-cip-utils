@@ -19,7 +19,8 @@ while read line; do
     $name == *"?C=S;O=D" || \
     $name == *"?C=S;O=A" || \
     $name == *"?C=D;O=D" || \
-    $name == *"?C=D;O=A" \
+    $name == *"?C=D;O=A" || \
+    $name == *"index.html" \
   ]]; then
     sum="$(md5sum $name 2>/dev/null)"
     sum=${sum%% *}     # Strip off filename to get sum only.
