@@ -145,6 +145,11 @@ diff_file.csv\n\n"
     end
   end
 
+  # Unfortunately, this command is a memory hog. On large files and directories
+  # this will choke due to memory restrictions. The shell script
+  # bin/metis_scan.sh will perform the same function without choking. I am
+  # leaving this script here as an exmaple of how to do the scan and hash with
+  # Ruby.
   class Scan < Etna::Command
     usage "Scan files in a directory. Extract full path name, size, and hash.
        * args - arg[0]: directory, arg[1]: output_scan_file.csv\n\n"
