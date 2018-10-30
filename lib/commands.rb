@@ -156,7 +156,7 @@ diff_file.csv\n\n"
         exit 1
       end
 
-      scan_data = []
+      output_scan_csv = CSV.open(output_scan_file, 'w')
       total_size = 0
       total_files = 0
       start_time = Time.now.getutc
@@ -165,18 +165,16 @@ diff_file.csv\n\n"
         if File.file?(path)
           size = File.size(path)
           digest = Digest::MD5.hexdigest(File.read(path))
-          scan_data.push([size, path, digest])
+
+          output_scan_csv << [size, path, digest]
+          output_scan_csv.flush if total_files%10 == 0
 
           total_size += size
           total_files += 1
         end
       end
 
-      CSV.open(output_scan_file, 'w') do |csv|
-        scan_data.each do |row|
-          csv << row
-        end
-      end
+      output_scan_csv.close
 
       puts "Scan summary of #{directory}:"
 
