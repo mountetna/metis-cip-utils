@@ -31,6 +31,40 @@ class MetisUtils
     end
   end
 
+  class ProcessChecksumFiles < Etna::Command
+    usage "Scan for 'md5checksum.txt' files and turn into a CSV.
+       * args - arg[0]: directory, arg[1]: output_file.csv\n\n"
+
+    def execute(directory, output_file)
+      if !File.directory?(directory)
+        puts "'#{directory}' is not a directory."
+        exit 1
+      end
+
+      output_csv = CSV.open(output_file, 'w')
+
+      Find.find(directory) do |path|
+        if path =~ /md5checksum\.txt/
+
+          path.slice!(directory)
+          path.slice!('md5checksum.txt')
+
+          File.open(directory+path+'md5checksum.txt').each do |line|
+            line.slice!("\n")
+            line = line.split(' ')
+            output_csv << [nil, "#{path}#{line[1]}", line[0]]
+          end
+        end
+      end
+
+      output_csv.close
+    end
+
+    def setup(config, *args)
+      super
+    end
+  end
+
   class Diff < Etna::Command
     usage "Compare two scans from two Redis DBs.
        * args - arg[0]: redis_db_index_1, arg[1]: redis_db_index_2, arg[3]: \
