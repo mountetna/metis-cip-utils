@@ -65,6 +65,29 @@ class MetisUtils
     end
   end
 
+  class Summary < Etna::Command
+    usage "Loop a scan file counting it's files and total size.
+       * args - arg[0]: scan_file.csv\n\n"
+
+    def execute(scan_file)
+      total_count = 0
+      total_size = 0
+      CSV.foreach(scan_file) do |row|
+        total_count += 1
+        total_size += row[0].to_i
+      end
+
+      puts "Summary of counts from scan #{scan_file}:"
+
+      puts "#{total_count} files."
+      puts "#{total_size} bytes."
+    end
+
+    def setup(config, *args)
+      super
+    end
+  end
+
   class Diff < Etna::Command
     usage "Compare two scans from two Redis DBs.
        * args - arg[0]: redis_db_index_1, arg[1]: redis_db_index_2, arg[3]: \
@@ -120,7 +143,7 @@ diff_file.csv\n\n"
       STDIN.gets.chomp
     end
 
-    def execute(redis_db_index, input_scan_file)
+    def execute(redis_db_index, input_scan_file, prefix)
 
       if !File.file?(input_scan_file)
         puts "'#{input_scan_file}' is not a file."
@@ -129,13 +152,14 @@ diff_file.csv\n\n"
 
       scan_data = CSV.read(input_scan_file)
       new_files = 0
+      new_size = 0
       files_wo_hashes = 0
       file_md5_miss = 0
       start_time = Time.now.getutc
       redis = Redis.new(db: redis_db_index)
 
       if redis.randomkey != nil
-        if confirm("The redis db #{} is not empty, continue? [y/n] ") != 'y'
+        if confirm("The redis db is not empty, continue? [y/n] ") != 'y'
           puts 'Exiting without doing anything.'
           exit 0
         end
@@ -144,10 +168,16 @@ diff_file.csv\n\n"
       scan_data.each_index do |row_num|
 
         row = scan_data[row_num]
+        row[1].slice!('./')
+        row[1].slice!(prefix) if !prefix.nil?
 
         if !redis.exists(row[1])
           new_files += 1
-          redis.set(row[1], {size: row[0], md5: row[2]}.to_json)
+          new_size += row[0].to_i
+
+          file_data = {size: row[0]}
+          file_data['md5'] = row[2] if row[2] != '' && !row[2].nil?
+          redis.set(row[1], file_data.to_json)
           next
         end
 
@@ -155,7 +185,10 @@ diff_file.csv\n\n"
 
         if !file_data.key?('md5')
           files_wo_hashes += 1
-          redis.set(row[1], {size: row[0], md5: row[2]}.to_json)
+
+          file_data = {size: row[0]}
+          file_data['md5'] = row[2] if row[2] != '' && !row[2].nil?
+          redis.set(row[1], file_data.to_json)
           next
         end
 
@@ -169,6 +202,7 @@ diff_file.csv\n\n"
 #{input_scan_file}:"
 
       puts "#{new_files} new files."
+      puts "#{new_size} new bytes."
       puts "#{files_wo_hashes} files do not have md5 hashes."
       puts "#{file_md5_miss} files have mismatched md5 hashes."
       puts "Update completed in (#{Time.now.getutc - start_time}) seconds."
