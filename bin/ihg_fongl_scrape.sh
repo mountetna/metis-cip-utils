@@ -15,10 +15,10 @@ wget \
   --spider \
   --server-response \
   --no-directories \
-  --output-file="$3" "$@" \
+  --output-file="${3}" "$@" \
   --limit-rate=20m \
-  --user="$1" \
-  --password="$2" \
+  --user="${1}" \
+  --password="${2}" \
   "$url"
 
 echo "Finished with crawling!"
