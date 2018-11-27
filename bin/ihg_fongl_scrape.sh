@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # The command call should be...
-# ./ihg_fongl_scrape.sh [user_name] [password] [output_file]
+# ./ihg_fongl_scrape.sh [user_name] [password] [output_file.log]
 
 url="https://ihg-client.ucsf.edu/fongl/"
 

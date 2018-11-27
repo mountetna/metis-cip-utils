@@ -100,6 +100,8 @@ diff_file.csv\n\n"
       new_files = 0
       new_size = 0
       new_list = []
+      file_md5_miss = 0
+      file_md5_match = 0
 
       redis_a_size = redis_a.dbsize
       redis_b_size = redis_b.dbsize
@@ -111,6 +113,19 @@ diff_file.csv\n\n"
           new_files += 1
           new_size += file_data['size'].to_i
           new_list.push([file_data['size'], b_key, file_data['md5']])
+        else
+          file_data_a = JSON.parse(redis_a.get(b_key))
+          file_data_b = JSON.parse(redis_b.get(b_key))
+
+          if !file_data_a['md5'].nil? && !file_data_b['md5'].nil?
+            if file_data_a['md5'] != file_data_b['md5']
+              puts "md5 mismatch: file '#{b_key}'; db #{redis_db_index_1} md5:\
+#{file_data_a['md5']}; db #{redis_db_index_2} md5:#{file_data_b['md5']}"
+              file_md5_miss += 1
+            else
+              file_md5_match += 1
+            end
+          end
         end
       end
 
@@ -134,6 +149,38 @@ diff_file.csv\n\n"
     end
   end
 
+  class Status < Etna::Command
+    usage "Get the general data information from a Redis DB.
+       * args - arg[0]: redis_db_index\n\n"
+
+    def execute(redis_db_index)
+
+      total_size = 0
+      with_hashes = 0
+
+      redis = Redis.new(db: redis_db_index)
+      keys = redis.keys('*')
+      size = keys.each do |key|
+        file_data = JSON.parse(redis.get(key))
+        total_size += file_data['size'].to_i
+        with_hashes += 1 if !file_data['md5'].nil?
+      end
+
+      puts "Summary of redis db #{redis_db_index}:"
+
+      puts "#{keys.length} total files."
+      puts "#{with_hashes} files have md5 hashes."
+      puts "#{total_size} total bytes."
+    end
+
+    def setup(config, *args)
+      super
+    end
+  end
+
+  # The output of this command only cross references items that are present in
+  # the scan AND db. This command does NOT give a complete view of data in the
+  # redis db. See the command `bin/status` for a summary of a redis db.
   class Update < Etna::Command
     usage "Update a Redis DB with a scan file.
        * args - arg[0]: redis_db_index, arg[1]: input_scan_file.csv\n\n"
@@ -143,7 +190,7 @@ diff_file.csv\n\n"
       STDIN.gets.chomp
     end
 
-    def execute(redis_db_index, input_scan_file, prefix)
+    def execute(redis_db_index, input_scan_file, prefix = nil)
 
       if !File.file?(input_scan_file)
         puts "'#{input_scan_file}' is not a file."
@@ -153,7 +200,7 @@ diff_file.csv\n\n"
       scan_data = CSV.read(input_scan_file)
       new_files = 0
       new_size = 0
-      files_wo_hashes = 0
+      files_with_hashes = 0
       file_md5_miss = 0
       start_time = Time.now.getutc
       redis = Redis.new(db: redis_db_index)
@@ -171,31 +218,45 @@ diff_file.csv\n\n"
         row[1].slice!('./')
         row[1].slice!(prefix) if !prefix.nil?
 
+        # Check if the current file name exists as a key.
         if !redis.exists(row[1])
           new_files += 1
           new_size += row[0].to_i
 
-          file_data = {size: row[0]}
-          file_data['md5'] = row[2] if row[2] != '' && !row[2].nil?
+          # Set the basic file data to the redis db.
+          file_data = {size: row[0], md5: nil}
+
+          if (row[2] != '' && !row[2].nil?)
+            file_data[:md5] = row[2]
+            files_with_hashes += 1
+          end
+
           redis.set(row[1], file_data.to_json)
           next
         end
 
         file_data = JSON.parse(redis.get(row[1]))
 
-        if !file_data.key?('md5')
-          files_wo_hashes += 1
-
-          file_data = {size: row[0]}
-          file_data['md5'] = row[2] if row[2] != '' && !row[2].nil?
+        # If there has not been a hash set yet then check if there is one from
+        # the scan and set it.
+        if file_data['md5'].nil? && row[2] != '' && !row[2].nil?
+          file_data['md5'] = row[2]
           redis.set(row[1], file_data.to_json)
-          next
         end
 
-        if file_data['md5'] != row[2]
-          file_md5_miss += 1
-          puts "md5 mismatch:#{row[1]}, db:#{file_data['md5']}, scan:#{row[2]}"
+        # Count the set hashes for each of the files.
+        files_with_hashes += 1 if !file_data['md5'].nil?
+
+        # If both the recorded md5 and the scanned md5 exist we can compare
+        # them.
+        if !file_data['md5'].nil? && row[2] != '' && !row[2].nil?
+          if file_data['md5'] != row[2]
+            file_md5_miss += 1
+            puts "md5 mismatch:#{row[1]}, db:#{file_data['md5']}, \
+scan:#{row[2]}"
+          end
         end
+
       end
 
       puts "Summary of update to redis db #{redis_db_index} from scan \
@@ -203,7 +264,7 @@ diff_file.csv\n\n"
 
       puts "#{new_files} new files."
       puts "#{new_size} new bytes."
-      puts "#{files_wo_hashes} files do not have md5 hashes."
+      puts "#{files_with_hashes} files have md5 hashes."
       puts "#{file_md5_miss} files have mismatched md5 hashes."
       puts "Update completed in (#{Time.now.getutc - start_time}) seconds."
     end
