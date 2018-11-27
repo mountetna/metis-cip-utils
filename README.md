@@ -53,12 +53,12 @@ $ bin/metis_utils update 3 [local_scan.csv]
 
 The numbers `2` and `3`, for the `redis_db_index`, are arbitrary and are only for example purposes. You can use any of the sixteen db "banks" from 0 to 15.
 
-As we complete more scans we can layer over our previous `updates` and get reports for when and where something was added (reports are output at the end of an update).
+As we complete more scans we can layer over our previous 'updates' and get reports for when and where something was added (reports are output at the end of an update).
 
 ex:
 ```
 $ bin/metis_utils update 2 [remote_scan_oct_30.csv]
-$ bin/metis_utils update 3 [local_scan_oct_12.csv]``
+$ bin/metis_utils update 3 [local_scan_oct_12.csv]
 ```
 
 ### Comparing and report generation.
@@ -77,7 +77,7 @@ $ bin/metis_utils diff [redis_db_index_A] [redis_db_index_B] [diff_output.csv]
 
 ### Data integrity.
 
-It is very important that our data has md5 hashes associated with in. In the local scanning step above an md5 hash will be generated on the scan. If our partners on the remote end have created md5 hashes we can load those as well. The comparison of the hashes will happen in the previous "difference" step if the hashes are already present.
+It is very important that our data has md5 hashes associated with it. In the local scanning step above an md5 hash will be generated on the scan. If our partners on the remote end have created md5 hashes we can load those as well. The comparison of the hashes will happen in the previous 'difference' step if the hashes are already present.
 
 Some times the remote hashes are in an `md5checksum.txt` file. We need to load these hashes into the Redis DB that contains the remote file data.
 
