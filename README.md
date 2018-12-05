@@ -47,8 +47,8 @@ $ bin/metis_utils update [redis_db_index] [scan_file.csv]
 ```
 ex:
 ```
-$ bin/metis_utils update 2 [remote_scan.csv]
-$ bin/metis_utils update 3 [local_scan.csv]
+$ bin/metis_utils update 2 remote_scan_oct_10.csv
+$ bin/metis_utils update 3 local_scan_oct_23.csv
 ```
 
 The numbers `2` and `3`, for the `redis_db_index`, are arbitrary and are only for example purposes. You can use any of the sixteen db "banks" from 0 to 15.
@@ -57,8 +57,8 @@ As we complete more scans we can layer over our previous 'updates' and get repor
 
 ex:
 ```
-$ bin/metis_utils update 2 [remote_scan_oct_30.csv]
-$ bin/metis_utils update 3 [local_scan_oct_12.csv]
+$ bin/metis_utils update 2 remote_scan_oct_30.csv
+$ bin/metis_utils update 3 local_scan_oct_12.csv
 ```
 
 ### Comparing and report generation.
@@ -92,3 +92,41 @@ $ bin/metis_utis process_checksum_files [directory] [output_scan.csv]
 ```
 
 You can now use the `bin/metis_utils update` command to update the appropriate Redis DB with the md5 checksums/hashes.
+
+## General S.O.P. for syncing data.
+
+This process should help keep our data organized and backed up properly. This series of steps could be followed with a different set of software.
+
+1. Scan locally
+  We want to understand what data we have. We need to scan the local directories for total data size and file count. We need to make sure all saved files have an associated MD5 hash.
+
+2. Scan remotely
+  We want to understand what the data set we are going to download looks like. We need to scan for total data size and file count.
+
+3. Diff the local and remote scans
+  We need to check the difference between the local scan and the remote scan. If there are new files to download from the remote this step should tell us so.
+
+4. Sync the data from the remote
+```
+#!/bin/bash
+
+# The command call should be...
+# ./ihg_fongl_sync.sh [user_name] [password] [url]
+
+wget \
+  -nH \
+  --cut-dirs=1 \
+  --no-parent \
+  --no-clobber \
+  --recursive \
+  --level=inf \
+  --user="${1}" \
+  --password="${2}" \
+  -mk \
+  "${3}"
+
+exit 0
+```
+
+5. Diff the local and remote scans again
+  If the sync went well the local data should mirror the remote data.
